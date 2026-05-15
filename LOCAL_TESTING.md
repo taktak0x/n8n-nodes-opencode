@@ -340,7 +340,7 @@ OpenCode server will show logs for each request:
 
 ```
 POST /session → Created session abc123
-POST /session/abc123/prompt → Processing...
+POST /session/abc123/message → Processing...
 GET /event → Streaming response...
 ```
 
@@ -431,9 +431,10 @@ DEBUG=* opencode serve
 
 # Test OpenCode API
 curl http://localhost:4096/app
+curl http://localhost:4096/global/health
 curl -X POST http://localhost:4096/session \
   -H "Content-Type: application/json" \
-  -d '{"agent":"build","model":{"providerID":"anthropic","modelID":"claude-3-5-sonnet-20241022"}}'
+  -d '{}'
 
 # Start n8n
 n8n start

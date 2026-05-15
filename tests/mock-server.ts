@@ -7,8 +7,6 @@ import http from "http";
 
 interface Session {
   id: string;
-  agent: string;
-  model: { providerID: string; modelID: string };
   createdAt: string;
 }
 
@@ -36,18 +34,23 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // GET /global/health - Server health
+  if (method === "GET" && url === "/global/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ healthy: true, version: "1.0.0-mock" }));
+    return;
+  }
+
   // POST /session - Create session
   if (method === "POST" && url === "/session") {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       try {
-        const { agent, model } = JSON.parse(body);
+        JSON.parse(body);
         const sessionId = `session-${++sessionCounter}`;
         const session: Session = {
           id: sessionId,
-          agent,
-          model,
           createdAt: new Date().toISOString(),
         };
         sessions.set(sessionId, session);
@@ -62,8 +65,8 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // POST /session/:id/prompt - Send prompt
-  const promptMatch = url?.match(/^\/session\/([^/]+)\/prompt$/);
+  // POST /session/:id/message - Send prompt
+  const promptMatch = url?.match(/^\/session\/([^/]+)\/message$/);
   if (method === "POST" && promptMatch) {
     const sessionId = promptMatch[1];
     if (!sessions.has(sessionId)) {
@@ -76,9 +79,14 @@ const server = http.createServer((req, res) => {
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       try {
-        JSON.parse(body); // Validate JSON
+        const parsed = JSON.parse(body);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "queued" }));
+        res.end(
+          JSON.stringify({
+            info: { id: `message-${Date.now()}` },
+            parts: parsed.parts ?? [],
+          }),
+        );
       } catch (error) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Invalid request body" }));
@@ -166,8 +174,9 @@ server.listen(PORT, () => {
   console.log(`Mock OpenCode server running on http://localhost:${PORT}`);
   console.log("Available endpoints:");
   console.log("  GET  /app");
+  console.log("  GET  /global/health");
   console.log("  POST /session");
-  console.log("  POST /session/:id/prompt");
+  console.log("  POST /session/:id/message");
   console.log("  GET  /event");
   console.log("  GET  /session/:id");
   console.log("  DELETE /session/:id");

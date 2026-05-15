@@ -155,13 +155,7 @@ export class OpenCodeChatModel extends BaseChatModel {
       const response = await fetch(`${this.baseUrl}/session`, {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          agent: this.agent,
-          model: {
-            providerID: this.providerID,
-            modelID: this.modelID,
-          },
-        }),
+        body: JSON.stringify({}),
         signal: controller.signal,
       });
 

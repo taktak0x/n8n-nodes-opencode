@@ -44,18 +44,8 @@ export class OpenCodeApi implements ICredentialType {
   test: ICredentialTestRequest = {
     request: {
       baseURL: "={{$credentials.baseUrl}}",
-      url: "/session",
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: {
-        agent: "coder",
-        model: {
-          providerID: "anthropic",
-          modelID: "claude-sonnet-4",
-        },
-      },
+      url: "/global/health",
+      method: "GET",
     },
   };
 }

@@ -104,13 +104,7 @@ describe("OpenCodeChatModel", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: expect.any(AbortSignal),
-          body: JSON.stringify({
-            agent: "build",
-            model: {
-              providerID: "anthropic",
-              modelID: "claude-3-5-sonnet-20241022",
-            },
-          }),
+          body: JSON.stringify({}),
         }),
       );
     });
