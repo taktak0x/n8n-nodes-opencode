@@ -1,5 +1,5 @@
 {
-  "name": "n8n-nodes-opencode",
+  "name": "@fsteccanella/n8n-nodes-opencode",
   "version": "1.0.0",
   "description": "n8n community node for OpenCode AI chat model integration",
   "keywords": [
@@ -11,14 +11,13 @@
     "langchain"
   ],
   "license": "MIT",
-  "homepage": "https://github.com/ssccio/n8n-nodes-opencode",
+  "homepage": "https://github.com/fsteccanella/n8n-nodes-opencode",
   "author": {
-    "name": "Ken Trenkelbach",
-    "email": "ken@sscc.io"
+    "name": "fsteccanella"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ssccio/n8n-nodes-opencode.git"
+    "url": "git+https://github.com/fsteccanella/n8n-nodes-opencode.git"
   },
   "main": "index.js",
   "scripts": {

@@ -13,7 +13,7 @@ Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes
 ### Option 1: npm
 
 ```bash
-npm install n8n-nodes-opencode
+npm install @fsteccanella/n8n-nodes-opencode
 ```
 
 ### Option 2: Manual Installation
@@ -201,7 +201,7 @@ The node supports models from these providers (via [models.dev](https://models.d
 
 ```bash
 # Test connection
-curl http://localhost:4096/app
+curl http://localhost:4096/global/health
 ```
 
 ### Authentication Issues
@@ -254,8 +254,7 @@ This node implements a custom LangChain `BaseChatModel` that:
 ## API Endpoints Used
 
 - `POST /session`: Create new session
-- `POST /session/:id/prompt`: Send prompt with message parts
-- `GET /event`: Server-Sent Events stream for responses
+- `POST /session/:id/message`: Send prompt with message parts
 - `DELETE /session/:id`: Clean up session
 
 ## Contributing
@@ -283,6 +282,6 @@ Contributions are welcome! Please:
 
 For issues and questions:
 
-- [GitHub Issues](https://github.com/ssccio/n8n-nodes-opencode/issues)
+- [GitHub Issues](https://github.com/fsteccanella/n8n-nodes-opencode/issues)
 - [n8n Community Forum](https://community.n8n.io/)
 - [OpenCode Discord](https://discord.gg/opencode)

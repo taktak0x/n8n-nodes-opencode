@@ -56,7 +56,7 @@ npm link
 
 # In your n8n directory
 cd ~/.n8n
-npm link n8n-nodes-opencode
+npm link @fsteccanella/n8n-nodes-opencode
 ```
 
 #### Option C: Publish to npm
@@ -66,7 +66,7 @@ npm link n8n-nodes-opencode
 npm publish
 ```
 
-Then in n8n: **Settings** → **Community Nodes** → Install `n8n-nodes-opencode`
+Then in n8n: **Settings** → **Community Nodes** → Install `@fsteccanella/n8n-nodes-opencode`
 
 ### 4. Restart n8n
 
