@@ -7,6 +7,31 @@ import { CallbackManagerForLLMRun } from "@langchain/core/callbacks/manager";
 import { BaseMessage, AIMessage } from "@langchain/core/messages";
 import { ChatResult } from "@langchain/core/outputs";
 import type { Runnable } from "@langchain/core/runnables";
+import zodToJsonSchema from "zod-to-json-schema";
+
+interface BoundTool {
+  name: string;
+  description?: string;
+  schema?: Record<string, unknown>;
+}
+
+interface StructuredToolCallResponse {
+  type: "tool_calls";
+  calls: Array<{
+    id?: string;
+    name: string;
+    arguments: Record<string, unknown>;
+  }>;
+}
+
+interface StructuredFinalResponse {
+  type: "final";
+  content: string;
+}
+
+type StructuredOpenCodeResponse =
+  | StructuredToolCallResponse
+  | StructuredFinalResponse;
 
 export interface OpenCodeChatModelInput extends BaseChatModelParams {
   baseUrl?: string;
@@ -16,6 +41,7 @@ export interface OpenCodeChatModelInput extends BaseChatModelParams {
   modelID?: string;
   temperature?: number;
   maxTokens?: number;
+  requestTimeoutMs?: number;
 }
 
 interface OpenCodeSession {
@@ -44,7 +70,8 @@ export class OpenCodeChatModel extends BaseChatModel {
   modelID = "claude-3-5-sonnet-20241022";
   temperature?: number;
   maxTokens?: number;
-  private requestTimeout = 30000; // 30 second timeout for API requests
+  private requestTimeout = 120000; // 300 second timeout for API requests
+  private boundTools: BoundTool[] = [];
 
   constructor(fields: OpenCodeChatModelInput) {
     super(fields);
@@ -75,26 +102,31 @@ export class OpenCodeChatModel extends BaseChatModel {
     this.modelID = modelID;
     this.temperature = fields.temperature;
     this.maxTokens = fields.maxTokens;
+    if (
+      fields.requestTimeoutMs !== undefined &&
+      Number.isFinite(fields.requestTimeoutMs) &&
+      fields.requestTimeoutMs > 0
+    ) {
+      this.requestTimeout = fields.requestTimeoutMs;
+    }
   }
 
   _llmType(): string {
     return "opencode";
   }
 
-  // Declare that this model supports tool calling
-  // This is required for n8n AI Agent to recognize tool support
   get supportsToolCalling(): boolean {
     return true;
   }
 
-  // Implement bindTools to enable tool calling functionality
-  // This method is called by LangChain when tools are bound to the model
   bindTools(
-    _tools: BindToolsInput[],
+    tools: BindToolsInput[],
     _kwargs?: Partial<this["ParsedCallOptions"]>,
   ): Runnable {
-    // Return a runnable that includes the bound tools
-    // OpenCode handles tools internally, so we just return this model instance
+    this.boundTools = tools
+      .map((tool) => this.normalizeBoundTool(tool))
+      .filter((tool): tool is BoundTool => tool !== undefined);
+
     return this as unknown as Runnable;
   }
 
@@ -115,16 +147,21 @@ export class OpenCodeChatModel extends BaseChatModel {
       // Send prompt to OpenCode and get response directly
       const responseText = await this.sendPrompt(sessionId, promptParts);
 
+      const parsedResponse = this.parseModelResponse(responseText);
+      const aiMessage = this.createAIMessage(parsedResponse, responseText);
+      const responseOutput =
+        parsedResponse?.type === "final" ? parsedResponse.content : responseText;
+
       // Notify callback manager if provided
       if (runManager) {
-        await runManager.handleLLMNewToken(responseText);
+        await runManager.handleLLMNewToken(responseOutput);
       }
 
       return {
         generations: [
           {
-            text: responseText,
-            message: new AIMessage(responseText),
+            text: responseOutput,
+            message: aiMessage,
           },
         ],
       };
@@ -194,32 +231,129 @@ export class OpenCodeChatModel extends BaseChatModel {
     const parts: OpenCodeMessagePart[] = [];
 
     for (const message of messages) {
+      const prefix = this.getMessagePrefix(message);
       const content = message.content;
 
       if (typeof content === "string") {
         parts.push({
           type: "text",
-          text: content,
+          text: `${prefix}${content}`,
         });
       } else if (Array.isArray(content)) {
         for (const item of content) {
           if (typeof item === "string") {
             parts.push({
               type: "text",
-              text: item,
+              text: `${prefix}${item}`,
             });
           } else if (item.type === "text") {
             parts.push({
               type: "text",
-              text: item.text,
+              text: `${prefix}${item.text}`,
             });
           }
           // Could add support for image_url and other types here
         }
       }
+
+      const toolResultText = this.serializeToolResultMessage(message);
+      if (toolResultText) {
+        parts.push({
+          type: "text",
+          text: toolResultText,
+        });
+      }
+
+      const toolCallText = this.serializeAIMessageToolCalls(message);
+      if (toolCallText) {
+        parts.push({
+          type: "text",
+          text: toolCallText,
+        });
+      }
+    }
+
+    if (this.boundTools.length > 0) {
+      parts.push({
+        type: "text",
+        text: this.buildToolCallingInstruction(),
+      });
     }
 
     return parts;
+  }
+
+  private getMessagePrefix(message: BaseMessage): string {
+    switch (message.getType()) {
+      case "system":
+        return "System: ";
+      case "tool":
+        return "Tool result: ";
+      default:
+        return "";
+    }
+  }
+
+  private serializeToolResultMessage(message: BaseMessage): string | undefined {
+    if (message.getType() !== "tool") {
+      return undefined;
+    }
+
+    const toolCallId = "tool_call_id" in message ? message.tool_call_id : undefined;
+    if (!toolCallId || typeof message.content !== "string") {
+      return undefined;
+    }
+
+    return `Tool result for ${toolCallId}: ${message.content}`;
+  }
+
+  private serializeAIMessageToolCalls(message: BaseMessage): string | undefined {
+    if (!(message instanceof AIMessage) || !message.tool_calls?.length) {
+      return undefined;
+    }
+
+    const calls = message.tool_calls.map((call) => ({
+      id: call.id,
+      name: call.name,
+      arguments: call.args,
+    }));
+
+    return `Assistant requested tools: ${JSON.stringify(calls)}`;
+  }
+
+  private buildToolCallingInstruction(): string {
+    return [
+      "You are acting as a tool-calling chat model for LangChain.",
+      "Respond with ONLY valid JSON and no markdown or surrounding text.",
+      "If you need to call one or more tools, return:",
+      JSON.stringify(
+        {
+          type: "tool_calls",
+          calls: [
+            {
+              id: "call_1",
+              name: "tool_name",
+              arguments: {
+                example: "value",
+              },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "If you can answer directly, return:",
+      JSON.stringify(
+        {
+          type: "final",
+          content: "your final answer",
+        },
+        null,
+        2,
+      ),
+      `Available tools: ${JSON.stringify(this.boundTools)}`,
+      "Tool arguments must exactly match the available tool schemas.",
+    ].join("\n");
   }
 
   private async sendPrompt(
@@ -255,7 +389,6 @@ export class OpenCodeChatModel extends BaseChatModel {
       if (this.maxTokens !== undefined) {
         body.max_tokens = this.maxTokens;
       }
-
       const response = await fetch(
         `${this.baseUrl}/session/${sessionId}/message`,
         {
@@ -308,6 +441,184 @@ export class OpenCodeChatModel extends BaseChatModel {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  private createAIMessage(
+    parsedResponse: StructuredOpenCodeResponse | undefined,
+    rawText: string,
+  ): AIMessage {
+    if (!parsedResponse) {
+      return new AIMessage(rawText);
+    }
+
+    if (parsedResponse.type === "tool_calls") {
+      return new AIMessage({
+        content: "",
+        tool_calls: parsedResponse.calls.map((call, index) => ({
+          id: call.id ?? `call_${index + 1}`,
+          name: call.name,
+          args: call.arguments,
+          type: "tool_call",
+        })),
+      });
+    }
+
+    return new AIMessage(parsedResponse.content);
+  }
+
+  private parseModelResponse(
+    responseText: string,
+  ): StructuredOpenCodeResponse | undefined {
+    if (this.boundTools.length === 0) {
+      return undefined;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(this.extractJsonObject(responseText)) as unknown;
+    } catch {
+      return {
+        type: "final",
+        content: responseText,
+      };
+    }
+
+    if (!parsed || typeof parsed !== "object" || !("type" in parsed)) {
+      return {
+        type: "final",
+        content: responseText,
+      };
+    }
+
+    const response = parsed as Record<string, unknown>;
+
+    if (response.type === "final") {
+      if (typeof response.content !== "string") {
+        throw new Error("OpenCode final response is missing string content");
+      }
+
+      return {
+        type: "final",
+        content: response.content,
+      };
+    }
+
+    if (response.type === "tool_calls") {
+      if (!Array.isArray(response.calls)) {
+        throw new Error("OpenCode tool response is missing calls array");
+      }
+
+      return {
+        type: "tool_calls",
+        calls: response.calls.map((call: unknown, index: number) =>
+          this.validateStructuredToolCall(call, index),
+        ),
+      };
+    }
+
+    throw new Error(
+      `Unsupported OpenCode structured response type: ${String(response.type)}`,
+    );
+  }
+
+  private validateStructuredToolCall(
+    call: unknown,
+    index: number,
+  ): StructuredToolCallResponse["calls"][number] {
+    if (!call || typeof call !== "object") {
+      throw new Error(`Tool call at index ${index} is not an object`);
+    }
+
+    const name = "name" in call ? call.name : undefined;
+    const args = "arguments" in call ? call.arguments : undefined;
+    const id = "id" in call ? call.id : undefined;
+
+    if (typeof name !== "string" || name.length === 0) {
+      throw new Error(`Tool call at index ${index} is missing a valid name`);
+    }
+
+    if (!this.boundTools.some((tool) => tool.name === name)) {
+      throw new Error(`OpenCode requested unknown tool: ${name}`);
+    }
+
+    if (!args || typeof args !== "object" || Array.isArray(args)) {
+      throw new Error(`Tool call ${name} is missing a valid arguments object`);
+    }
+
+    return {
+      id: typeof id === "string" && id.length > 0 ? id : undefined,
+      name,
+      arguments: args as Record<string, unknown>,
+    };
+  }
+
+  private extractJsonObject(responseText: string): string {
+    const trimmed = responseText.trim();
+    const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (fencedMatch) {
+      return fencedMatch[1].trim();
+    }
+
+    const firstBrace = trimmed.indexOf("{");
+    const lastBrace = trimmed.lastIndexOf("}");
+    if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+      throw new Error("OpenCode did not return a JSON object");
+    }
+
+    return trimmed.slice(firstBrace, lastBrace + 1);
+  }
+
+  private normalizeBoundTool(tool: BindToolsInput): BoundTool | undefined {
+    if (!tool || typeof tool !== "object") {
+      return undefined;
+    }
+
+    const toolRecord = tool as Record<string, unknown>;
+
+    const name = "name" in toolRecord ? toolRecord.name : undefined;
+    if (typeof name !== "string" || name.length === 0) {
+      return undefined;
+    }
+
+    return {
+      name,
+      description:
+        "description" in toolRecord && typeof toolRecord.description === "string"
+          ? toolRecord.description
+          : undefined,
+      schema: this.extractToolSchema(toolRecord),
+    };
+  }
+
+  private extractToolSchema(
+    tool: Record<string, unknown>,
+  ): Record<string, unknown> | undefined {
+    const schema = tool.schema ?? tool.parameters ?? tool.inputSchema;
+
+    if (!schema) {
+      return undefined;
+    }
+
+    if (this.isZodSchema(schema)) {
+      const convertZodSchema = zodToJsonSchema as unknown as (
+        input: unknown,
+      ) => Record<string, unknown>;
+      return convertZodSchema(schema);
+    }
+
+    return this.asObject(schema);
+  }
+
+  private asObject(value: unknown): Record<string, unknown> | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return undefined;
+    }
+
+    return value as Record<string, unknown>;
+  }
+
+  private isZodSchema(value: unknown): boolean {
+    return !!value && typeof value === "object" && "safeParse" in value;
   }
 
   private async deleteSession(sessionId: string): Promise<void> {

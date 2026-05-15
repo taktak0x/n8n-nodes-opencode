@@ -247,6 +247,139 @@ describe("OpenCodeChatModel", () => {
         ]),
       ).rejects.toThrow("Failed to send prompt to OpenCode (400): Bad Request");
     });
+
+    it("should include tool-calling instructions when tools are bound", async () => {
+      model.bindTools([
+        {
+          name: "searchDocs",
+          description: "Searches the docs",
+          schema: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+            },
+            required: ["query"],
+          },
+        },
+      ] as any);
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          parts: [{ type: "text", text: '{"type":"final","content":"done"}' }],
+        }),
+      });
+
+      const promptParts = (model as any).convertMessagesToPromptParts([
+        new HumanMessage("Test prompt"),
+      ]);
+
+      await (model as any).sendPrompt("session-123", promptParts);
+
+      const [, request] = mockFetch.mock.calls[0];
+      const body = JSON.parse(request.body);
+      const instruction = body.parts[body.parts.length - 1].text;
+
+      expect(instruction).toContain("Respond with ONLY valid JSON");
+      expect(instruction).toContain('"type": "tool_calls"');
+      expect(instruction).toContain('"name":"searchDocs"');
+    });
+  });
+
+  describe("Tool Calling", () => {
+    beforeEach(() => {
+      model.bindTools([
+        {
+          name: "searchDocs",
+          description: "Searches the docs",
+          schema: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+            },
+            required: ["query"],
+          },
+        },
+      ] as any);
+    });
+
+    it("should return tool calls as AIMessage metadata", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            id: "session-123",
+            createdAt: "2025-01-01T00:00:00Z",
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            parts: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  type: "tool_calls",
+                  calls: [
+                    {
+                      id: "call_1",
+                      name: "searchDocs",
+                      arguments: { query: "n8n" },
+                    },
+                  ],
+                }),
+              },
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true });
+
+      const result = await model._generate([new HumanMessage("Find docs")], {} as any);
+      const message = result.generations[0].message as AIMessage;
+
+      expect(result.generations[0].text).toContain('"type":"tool_calls"');
+      expect(message.tool_calls).toEqual([
+        {
+          id: "call_1",
+          name: "searchDocs",
+          args: { query: "n8n" },
+          type: "tool_call",
+        },
+      ]);
+    });
+
+    it("should return final answers from structured JSON", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            id: "session-123",
+            createdAt: "2025-01-01T00:00:00Z",
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            parts: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  type: "final",
+                  content: "Here is the answer",
+                }),
+              },
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true });
+
+      const result = await model._generate([new HumanMessage("Answer directly")], {} as any);
+      const message = result.generations[0].message as AIMessage;
+
+      expect(result.generations[0].text).toBe("Here is the answer");
+      expect(message.content).toBe("Here is the answer");
+      expect(message.tool_calls).toEqual([]);
+    });
   });
 
   describe("Cleanup", () => {

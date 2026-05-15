@@ -110,6 +110,14 @@ export class LmChatOpenCode implements INodeType {
             description:
               "Maximum number of tokens to generate. -1 means no limit.",
           },
+          {
+            displayName: "Request Timeout (ms)",
+            name: "requestTimeoutMs",
+            type: "number",
+            default: 120000,
+            description:
+              "Maximum time to wait for an OpenCode API response in milliseconds.",
+          },
         ],
       },
     ],
@@ -254,6 +262,7 @@ export class LmChatOpenCode implements INodeType {
       baseUrl?: string;
       temperature?: number;
       maxTokens?: number;
+      requestTimeoutMs?: number;
     };
 
     // Use baseUrl from options, fallback to credentials, fallback to default
@@ -270,6 +279,7 @@ export class LmChatOpenCode implements INodeType {
       modelID,
       temperature: options.temperature,
       maxTokens: options.maxTokens !== -1 ? options.maxTokens : undefined,
+      requestTimeoutMs: options.requestTimeoutMs,
     });
 
     return {

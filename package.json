@@ -1,6 +1,6 @@
 {
   "name": "@fsteccanella/n8n-nodes-opencode",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "n8n community node for OpenCode AI chat model integration",
   "keywords": [
     "n8n-community-node-package",
@@ -64,6 +64,7 @@
     "n8n-workflow": "*"
   },
   "dependencies": {
-    "@langchain/core": "^0.3.28"
+    "@langchain/core": "^0.3.28",
+    "zod-to-json-schema": "^3.25.2"
   }
 }
