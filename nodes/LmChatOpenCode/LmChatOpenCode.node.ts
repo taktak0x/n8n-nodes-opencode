@@ -52,6 +52,7 @@ export class LmChatOpenCode implements INodeType {
         options: [
           { name: "REST", value: "rest" },
           { name: "ACP (Local)", value: "acp" },
+          { name: "ACP (HTTP bridge)", value: "acp-http" },
         ],
       },
       {
@@ -93,7 +94,7 @@ export class LmChatOpenCode implements INodeType {
         type: "string",
         description: "Provider ID passed to local OpenCode ACP",
         default: "",
-        displayOptions: { show: { transport: ["acp"] } },
+        displayOptions: { show: { transport: ["acp", "acp-http"] } },
       },
       {
         displayName: "ACP Model ID",
@@ -101,7 +102,7 @@ export class LmChatOpenCode implements INodeType {
         type: "string",
         description: "Model ID passed to local OpenCode ACP",
         default: "",
-        displayOptions: { show: { transport: ["acp"] } },
+        displayOptions: { show: { transport: ["acp", "acp-http"] } },
       },
       {
         displayName: "ACP Executable",
@@ -149,6 +150,15 @@ export class LmChatOpenCode implements INodeType {
               "Override the base URL from credentials. Leave empty to use credentials.",
             placeholder: "http://opencode-service:4096",
             displayOptions: { show: { transport: ["rest"] } },
+          },
+          {
+            displayName: "ACP Bridge URL",
+            name: "acpBridgeUrl",
+            type: "string",
+            default: "",
+            description: "HTTP endpoint for the ACP bridge.",
+            placeholder: "https://acp-bridge.example.com",
+            displayOptions: { show: { transport: ["acp-http"] } },
           },
           {
             displayName: "Temperature",
@@ -317,21 +327,24 @@ export class LmChatOpenCode implements INodeType {
     itemIndex: number,
   ): Promise<SupplyData> {
     const transport = this.getNodeParameter("transport", itemIndex, "rest") as
-      "rest" | "acp";
+      "rest" | "acp" | "acp-http";
     const credentials =
-      transport === "rest"
+      transport !== "acp"
         ? await this.getCredentials("openCodeApi")
         : undefined;
-    const agent = this.getNodeParameter("agent", itemIndex, "build") as string;
+    const agent =
+      transport === "rest"
+        ? (this.getNodeParameter("agent", itemIndex, "build") as string)
+        : undefined;
     const providerID = this.getNodeParameter(
-      transport === "acp" ? "acpProviderID" : "providerID",
+      transport === "rest" ? "providerID" : "acpProviderID",
       itemIndex,
-      transport === "acp" ? "" : "anthropic",
+      transport === "rest" ? "anthropic" : "",
     ) as string;
     const modelID = this.getNodeParameter(
-      transport === "acp" ? "acpModelID" : "modelID",
+      transport === "rest" ? "modelID" : "acpModelID",
       itemIndex,
-      transport === "acp" ? "" : "claude-3-5-sonnet-20241022",
+      transport === "rest" ? "claude-3-5-sonnet-20241022" : "",
     ) as string;
     const acpExecutable =
       transport === "acp"
@@ -348,6 +361,7 @@ export class LmChatOpenCode implements INodeType {
         : undefined;
     const options = this.getNodeParameter("options", itemIndex, {}) as {
       baseUrl?: string;
+      acpBridgeUrl?: string;
       temperature?: number;
       maxTokens?: number;
       requestTimeoutMs?: number;
@@ -355,9 +369,22 @@ export class LmChatOpenCode implements INodeType {
 
     // Use baseUrl from options, fallback to credentials, fallback to default
     const baseUrl =
-      options.baseUrl ||
-      (credentials?.baseUrl as string) ||
-      "http://localhost:4096";
+      transport === "acp-http"
+        ? options.acpBridgeUrl
+        : options.baseUrl ||
+          (credentials?.baseUrl as string) ||
+          "http://localhost:4096";
+
+    if (transport === "acp-http") {
+      if (!baseUrl) {
+        throw new Error("ACP Bridge URL is required for ACP (HTTP bridge).");
+      }
+      try {
+        new URL(baseUrl);
+      } catch {
+        throw new Error(`Invalid ACP Bridge URL: ${baseUrl}`);
+      }
+    }
 
     const model = new OpenCodeChatModel({
       baseUrl,

@@ -13,9 +13,13 @@ export interface OpenCodeAcpClientOptions {
   providerID: string;
   modelID: string;
   timeoutMs: number;
+  httpUrl?: string;
+  bearerToken?: string;
   cwd?: string;
   acpExecutable?: string;
 }
+
+const MAX_HTTP_RESPONSE_BYTES = 1024 * 1024;
 
 export class OpenCodeAcpClient {
   private readonly options: OpenCodeAcpClientOptions;
@@ -40,15 +44,26 @@ export class OpenCodeAcpClient {
     if (!options.modelID || options.modelID.trim() === "") {
       throw new Error("OpenCode ACP modelID is required and cannot be empty");
     }
-    const cwd = options.cwd ?? process.cwd();
-    if (!isAbsolute(cwd)) {
-      throw new Error(`OpenCode ACP cwd must be absolute: ${cwd}`);
+    if (options.httpUrl) {
+      try {
+        new URL(options.httpUrl);
+      } catch {
+        throw new Error(`OpenCode ACP HTTP URL is invalid: ${options.httpUrl}`);
+      }
+    } else {
+      const cwd = options.cwd ?? process.cwd();
+      if (!isAbsolute(cwd)) {
+        throw new Error(`OpenCode ACP cwd must be absolute: ${cwd}`);
+      }
+      this.options = options;
+      this.options.cwd = cwd;
+      return;
     }
     this.options = options;
-    this.options.cwd = cwd;
   }
 
   async prompt(prompt: string): Promise<string> {
+    if (this.options.httpUrl) return this.promptHttp(prompt);
     if (this.process) {
       throw new Error("OpenCode ACP client is already running");
     }
@@ -97,6 +112,98 @@ export class OpenCodeAcpClient {
     } finally {
       await this.stopProcess();
     }
+  }
+
+  private async promptHttp(prompt: string): Promise<string> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      this.options.timeoutMs,
+    );
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (this.options.bearerToken) {
+      headers.Authorization = `Bearer ${this.options.bearerToken}`;
+    }
+
+    try {
+      const response = await fetch(this.options.httpUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          prompt,
+          providerID: this.options.providerID,
+          modelID: this.options.modelID,
+        }),
+        signal: controller.signal,
+      });
+      const body = await this.readHttpBody(response);
+      if (!response.ok) {
+        throw new Error(
+          `OpenCode ACP HTTP request failed (${response.status}): ${body}`,
+        );
+      }
+
+      let data: unknown;
+      try {
+        data = JSON.parse(body);
+      } catch {
+        throw new Error("OpenCode ACP HTTP response is not valid JSON");
+      }
+      if (
+        !data ||
+        typeof data !== "object" ||
+        !("text" in data) ||
+        typeof data.text !== "string"
+      ) {
+        throw new Error(
+          'OpenCode ACP HTTP response must contain string "text"',
+        );
+      }
+      return data.text;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(
+          `OpenCode ACP HTTP request timed out after ${this.options.timeoutMs / 1000} seconds`,
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private async readHttpBody(response: Response): Promise<string> {
+    if (!response.body) {
+      const body = await response.text();
+      if (Buffer.byteLength(body, "utf8") > MAX_HTTP_RESPONSE_BYTES) {
+        throw new Error("OpenCode ACP HTTP response exceeded 1 MiB");
+      }
+      return body;
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    let done = false;
+    try {
+      while (!done) {
+        const result = await reader.read();
+        done = result.done;
+        if (done) break;
+        const value = result.value;
+        size += value.byteLength;
+        if (size > MAX_HTTP_RESPONSE_BYTES) {
+          await reader.cancel();
+          throw new Error("OpenCode ACP HTTP response exceeded 1 MiB");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return new TextDecoder().decode(Buffer.concat(chunks));
   }
 
   private startProcess(): void {

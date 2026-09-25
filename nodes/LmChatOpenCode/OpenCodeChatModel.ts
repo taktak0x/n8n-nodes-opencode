@@ -42,7 +42,7 @@ export interface OpenCodeChatModelInput extends BaseChatModelParams {
   temperature?: number;
   maxTokens?: number;
   requestTimeoutMs?: number;
-  transport?: "rest" | "acp";
+  transport?: "rest" | "acp" | "acp-http";
   acpExecutable?: string;
   cwd?: string;
 }
@@ -75,7 +75,7 @@ export class OpenCodeChatModel extends BaseChatModel {
   maxTokens?: number;
   private requestTimeout = 120000; // 300 second timeout for API requests
   private boundTools: BoundTool[] = [];
-  private transport: "rest" | "acp" = "rest";
+  private transport: "rest" | "acp" | "acp-http" = "rest";
   private acpExecutable?: string;
   private acpCwd = process.cwd();
 
@@ -132,7 +132,7 @@ export class OpenCodeChatModel extends BaseChatModel {
     tools: BindToolsInput[],
     _kwargs?: Partial<this["ParsedCallOptions"]>,
   ): Runnable {
-    if (this.transport === "acp") {
+    if (this.transport !== "rest") {
       throw new Error("OpenCode ACP transport does not support tools");
     }
     this.boundTools = tools
@@ -154,13 +154,14 @@ export class OpenCodeChatModel extends BaseChatModel {
       const promptParts = this.convertMessagesToPromptParts(messages);
 
       let responseText: string;
-      if (this.transport === "acp") {
+      if (this.transport !== "rest") {
         responseText = await new OpenCodeAcpClient({
           providerID: this.providerID,
           modelID: this.modelID,
           timeoutMs: this.requestTimeout,
-          acpExecutable: this.acpExecutable,
-          cwd: this.acpCwd,
+          ...(this.transport === "acp-http"
+            ? { httpUrl: this.baseUrl, bearerToken: this.apiKey }
+            : { acpExecutable: this.acpExecutable, cwd: this.acpCwd }),
         }).prompt(this.convertMessagesToAcpPrompt(messages));
       } else {
         sessionId = await this.createSession();
