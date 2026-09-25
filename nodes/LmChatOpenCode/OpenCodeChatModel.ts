@@ -8,6 +8,7 @@ import { BaseMessage, AIMessage } from "@langchain/core/messages";
 import { ChatResult } from "@langchain/core/outputs";
 import type { Runnable } from "@langchain/core/runnables";
 import zodToJsonSchema from "zod-to-json-schema";
+import { OpenCodeAcpClient } from "./OpenCodeAcpClient";
 
 interface BoundTool {
   name: string;
@@ -30,8 +31,7 @@ interface StructuredFinalResponse {
 }
 
 type StructuredOpenCodeResponse =
-  | StructuredToolCallResponse
-  | StructuredFinalResponse;
+  StructuredToolCallResponse | StructuredFinalResponse;
 
 export interface OpenCodeChatModelInput extends BaseChatModelParams {
   baseUrl?: string;
@@ -42,6 +42,9 @@ export interface OpenCodeChatModelInput extends BaseChatModelParams {
   temperature?: number;
   maxTokens?: number;
   requestTimeoutMs?: number;
+  transport?: "rest" | "acp";
+  acpExecutable?: string;
+  cwd?: string;
 }
 
 interface OpenCodeSession {
@@ -72,6 +75,9 @@ export class OpenCodeChatModel extends BaseChatModel {
   maxTokens?: number;
   private requestTimeout = 120000; // 300 second timeout for API requests
   private boundTools: BoundTool[] = [];
+  private transport: "rest" | "acp" = "rest";
+  private acpExecutable?: string;
+  private acpCwd = process.cwd();
 
   constructor(fields: OpenCodeChatModelInput) {
     super(fields);
@@ -102,6 +108,9 @@ export class OpenCodeChatModel extends BaseChatModel {
     this.modelID = modelID;
     this.temperature = fields.temperature;
     this.maxTokens = fields.maxTokens;
+    this.transport = fields.transport ?? this.transport;
+    this.acpExecutable = fields.acpExecutable;
+    this.acpCwd = fields.cwd ?? this.acpCwd;
     if (
       fields.requestTimeoutMs !== undefined &&
       Number.isFinite(fields.requestTimeoutMs) &&
@@ -116,13 +125,16 @@ export class OpenCodeChatModel extends BaseChatModel {
   }
 
   get supportsToolCalling(): boolean {
-    return true;
+    return this.transport === "rest";
   }
 
   bindTools(
     tools: BindToolsInput[],
     _kwargs?: Partial<this["ParsedCallOptions"]>,
   ): Runnable {
+    if (this.transport === "acp") {
+      throw new Error("OpenCode ACP transport does not support tools");
+    }
     this.boundTools = tools
       .map((tool) => this.normalizeBoundTool(tool))
       .filter((tool): tool is BoundTool => tool !== undefined);
@@ -138,19 +150,29 @@ export class OpenCodeChatModel extends BaseChatModel {
     let sessionId: string | undefined;
 
     try {
-      // Create fresh session for this execution
-      sessionId = await this.createSession();
-
       // Convert messages to OpenCode prompt format
       const promptParts = this.convertMessagesToPromptParts(messages);
 
-      // Send prompt to OpenCode and get response directly
-      const responseText = await this.sendPrompt(sessionId, promptParts);
+      let responseText: string;
+      if (this.transport === "acp") {
+        responseText = await new OpenCodeAcpClient({
+          providerID: this.providerID,
+          modelID: this.modelID,
+          timeoutMs: this.requestTimeout,
+          acpExecutable: this.acpExecutable,
+          cwd: this.acpCwd,
+        }).prompt(this.convertMessagesToAcpPrompt(messages));
+      } else {
+        sessionId = await this.createSession();
+        responseText = await this.sendPrompt(sessionId, promptParts);
+      }
 
       const parsedResponse = this.parseModelResponse(responseText);
       const aiMessage = this.createAIMessage(parsedResponse, responseText);
       const responseOutput =
-        parsedResponse?.type === "final" ? parsedResponse.content : responseText;
+        parsedResponse?.type === "final"
+          ? parsedResponse.content
+          : responseText;
 
       // Notify callback manager if provided
       if (runManager) {
@@ -294,12 +316,52 @@ export class OpenCodeChatModel extends BaseChatModel {
     }
   }
 
+  private convertMessagesToAcpPrompt(messages: BaseMessage[]): string {
+    return messages
+      .map((message) => {
+        const type = message.getType();
+        if (
+          type === "tool" ||
+          (message instanceof AIMessage && message.tool_calls?.length)
+        ) {
+          throw new Error(
+            "OpenCode ACP does not support tool messages or tool calls",
+          );
+        }
+
+        const role =
+          type === "system" ? "system" : type === "ai" ? "assistant" : "user";
+        const content = this.getTextContent(message);
+        return `<${role}>\n${content}\n</${role}>`;
+      })
+      .join("\n\n");
+  }
+
+  private getTextContent(message: BaseMessage): string {
+    if (typeof message.content === "string") {
+      return message.content;
+    }
+    if (Array.isArray(message.content)) {
+      const text = message.content.map((item) => {
+        if (typeof item === "string") return item;
+        if (item.type === "text" && typeof item.text === "string")
+          return item.text;
+        throw new Error(
+          `OpenCode ACP does not support ${item.type ?? "non-text"} message content`,
+        );
+      });
+      return text.join("\n");
+    }
+    throw new Error("OpenCode ACP requires text message content");
+  }
+
   private serializeToolResultMessage(message: BaseMessage): string | undefined {
     if (message.getType() !== "tool") {
       return undefined;
     }
 
-    const toolCallId = "tool_call_id" in message ? message.tool_call_id : undefined;
+    const toolCallId =
+      "tool_call_id" in message ? message.tool_call_id : undefined;
     if (!toolCallId || typeof message.content !== "string") {
       return undefined;
     }
@@ -307,7 +369,9 @@ export class OpenCodeChatModel extends BaseChatModel {
     return `Tool result for ${toolCallId}: ${message.content}`;
   }
 
-  private serializeAIMessageToolCalls(message: BaseMessage): string | undefined {
+  private serializeAIMessageToolCalls(
+    message: BaseMessage,
+  ): string | undefined {
     if (!(message instanceof AIMessage) || !message.tool_calls?.length) {
       return undefined;
     }
@@ -583,7 +647,8 @@ export class OpenCodeChatModel extends BaseChatModel {
     return {
       name,
       description:
-        "description" in toolRecord && typeof toolRecord.description === "string"
+        "description" in toolRecord &&
+        typeof toolRecord.description === "string"
           ? toolRecord.description
           : undefined,
       schema: this.extractToolSchema(toolRecord),

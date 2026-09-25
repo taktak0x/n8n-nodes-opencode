@@ -44,6 +44,17 @@ export class LmChatOpenCode implements INodeType {
     outputNames: ["Model"],
     properties: [
       {
+        displayName: "Transport",
+        name: "transport",
+        type: "options",
+        description: "How to connect to OpenCode",
+        default: "rest",
+        options: [
+          { name: "REST", value: "rest" },
+          { name: "ACP (Local)", value: "acp" },
+        ],
+      },
+      {
         displayName: "Agent",
         name: "agent",
         type: "options",
@@ -52,6 +63,7 @@ export class LmChatOpenCode implements INodeType {
         typeOptions: {
           loadOptionsMethod: "getAgents",
         },
+        displayOptions: { show: { transport: ["rest"] } },
       },
       {
         displayName: "Model Provider",
@@ -62,16 +74,64 @@ export class LmChatOpenCode implements INodeType {
         typeOptions: {
           loadOptionsMethod: "getProviders",
         },
+        displayOptions: { show: { transport: ["rest"] } },
       },
       {
         displayName: "Model ID",
         name: "modelID",
         type: "options",
         description: "The specific model to use",
-        default: "",
+        default: "claude-3-5-sonnet-20241022",
         typeOptions: {
           loadOptionsMethod: "getModels",
         },
+        displayOptions: { show: { transport: ["rest"] } },
+      },
+      {
+        displayName: "ACP Provider ID",
+        name: "acpProviderID",
+        type: "string",
+        description: "Provider ID passed to local OpenCode ACP",
+        default: "",
+        displayOptions: { show: { transport: ["acp"] } },
+      },
+      {
+        displayName: "ACP Model ID",
+        name: "acpModelID",
+        type: "string",
+        description: "Model ID passed to local OpenCode ACP",
+        default: "",
+        displayOptions: { show: { transport: ["acp"] } },
+      },
+      {
+        displayName: "ACP Executable",
+        name: "acpExecutable",
+        type: "string",
+        description:
+          "Executable used for local OpenCode ACP. Must exist in the same runtime.",
+        default: "opencode",
+        displayOptions: { show: { transport: ["acp"] } },
+      },
+      {
+        displayName: "ACP Working Directory",
+        name: "acpCwd",
+        type: "string",
+        description:
+          "Absolute working directory for local OpenCode ACP. Leave empty to use the runtime working directory.",
+        default: "",
+        placeholder: "/workspace/project",
+        typeOptions: {
+          validation: [
+            {
+              type: "regex",
+              properties: {
+                regex: "^(?:$|/|[A-Za-z]:[\\\\/])",
+                errorMessage: "Working directory must be an absolute path.",
+              },
+            },
+          ],
+        },
+        displayOptions: { show: { transport: ["acp"] } },
       },
       {
         displayName: "Options",
@@ -88,6 +148,7 @@ export class LmChatOpenCode implements INodeType {
             description:
               "Override the base URL from credentials. Leave empty to use credentials.",
             placeholder: "http://opencode-service:4096",
+            displayOptions: { show: { transport: ["rest"] } },
           },
           {
             displayName: "Temperature",
@@ -101,6 +162,7 @@ export class LmChatOpenCode implements INodeType {
             },
             description:
               "Controls randomness in the response. Lower values make output more focused and deterministic.",
+            displayOptions: { show: { transport: ["rest"] } },
           },
           {
             displayName: "Maximum Tokens",
@@ -109,6 +171,7 @@ export class LmChatOpenCode implements INodeType {
             default: -1,
             description:
               "Maximum number of tokens to generate. -1 means no limit.",
+            displayOptions: { show: { transport: ["rest"] } },
           },
           {
             displayName: "Request Timeout (ms)",
@@ -253,11 +316,36 @@ export class LmChatOpenCode implements INodeType {
     this: ISupplyDataFunctions,
     itemIndex: number,
   ): Promise<SupplyData> {
-    const credentials = await this.getCredentials("openCodeApi");
-
-    const agent = this.getNodeParameter("agent", itemIndex) as string;
-    const providerID = this.getNodeParameter("providerID", itemIndex) as string;
-    const modelID = this.getNodeParameter("modelID", itemIndex) as string;
+    const transport = this.getNodeParameter("transport", itemIndex, "rest") as
+      "rest" | "acp";
+    const credentials =
+      transport === "rest"
+        ? await this.getCredentials("openCodeApi")
+        : undefined;
+    const agent = this.getNodeParameter("agent", itemIndex, "build") as string;
+    const providerID = this.getNodeParameter(
+      transport === "acp" ? "acpProviderID" : "providerID",
+      itemIndex,
+      transport === "acp" ? "" : "anthropic",
+    ) as string;
+    const modelID = this.getNodeParameter(
+      transport === "acp" ? "acpModelID" : "modelID",
+      itemIndex,
+      transport === "acp" ? "" : "claude-3-5-sonnet-20241022",
+    ) as string;
+    const acpExecutable =
+      transport === "acp"
+        ? (this.getNodeParameter(
+            "acpExecutable",
+            itemIndex,
+            "opencode",
+          ) as string)
+        : undefined;
+    const acpCwd =
+      transport === "acp"
+        ? (this.getNodeParameter("acpCwd", itemIndex, "") as string) ||
+          undefined
+        : undefined;
     const options = this.getNodeParameter("options", itemIndex, {}) as {
       baseUrl?: string;
       temperature?: number;
@@ -280,6 +368,9 @@ export class LmChatOpenCode implements INodeType {
       temperature: options.temperature,
       maxTokens: options.maxTokens !== -1 ? options.maxTokens : undefined,
       requestTimeoutMs: options.requestTimeoutMs,
+      transport,
+      acpExecutable,
+      cwd: acpCwd,
     });
 
     return {

@@ -85,6 +85,19 @@ describe("OpenCodeChatModel", () => {
     });
   });
 
+  it("reports no ACP tool calling and rejects bound tools", () => {
+    const acpModel = new OpenCodeChatModel({
+      transport: "acp",
+      providerID: "anthropic",
+      modelID: "test-model",
+    });
+
+    expect(acpModel.supportsToolCalling).toBe(false);
+    expect(() => acpModel.bindTools([{ name: "searchDocs" }] as any)).toThrow(
+      "does not support tools",
+    );
+  });
+
   describe("Session Management", () => {
     it("should create a session when needed", async () => {
       mockFetch.mockResolvedValueOnce({

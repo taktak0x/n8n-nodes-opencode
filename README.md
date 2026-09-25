@@ -44,23 +44,31 @@ By default, OpenCode server runs on `http://localhost:4096`.
 
 ## Credentials
 
-This node requires OpenCode API credentials:
+REST transport requires OpenCode API credentials. ACP transport uses local `opencode acp` and needs no HTTP credentials:
 
-1. In n8n, go to **Credentials** → **New**
+1. For REST, go to **Credentials** → **New**
 2. Search for "OpenCode API"
-3. Configure:
+3. Configure REST credentials:
    - **Base URL**: Your OpenCode server URL (default: `http://localhost:4096`)
    - **API Key**: (Optional) If your OpenCode instance requires authentication
 
 ## Usage
 
 1. Add the **OpenCode Chat Model** node to your workflow
-2. Select or create OpenCode API credentials
+2. Select or create OpenCode API credentials for REST
 3. Configure the model:
-   - **Agent**: Choose the OpenCode agent type (`build`, `chat`, `debug`)
-   - **Model Provider**: Select provider (Anthropic, OpenAI, Google, Groq, Ollama)
-   - **Model ID**: Specify the model (e.g., `claude-3-5-sonnet-20241022`)
+   - **Transport**: Choose `REST` or `ACP (Local)` (`REST` default)
+   - **Agent**: Choose the OpenCode agent type when using REST
+   - **Model Provider** / **Model ID**: Configure REST model
+   - **ACP Provider ID** / **ACP Model ID**: Configure local ACP model
+   - Ensure `opencode` is available on PATH for ACP
 4. Connect to an **AI Agent** node or other LangChain-compatible nodes
+
+### ACP Limitations
+
+ACP is a text-only minimal lifecycle transport. Tool calling and LangChain `bindTools()` are unsupported and rejected; ACP does not provide streaming or durable sessions. Use `REST` for LangChain tool workflows.
+
+ACP starts `opencode acp` locally. The `opencode` executable must exist in the same runtime as n8n, or be exposed through an explicit safe wrapper.
 
 ### Example Workflow
 
@@ -185,10 +193,10 @@ The node supports models from these providers (via [models.dev](https://models.d
 
 ## Features
 
-- ✅ Full LangChain integration
+- ✅ Full LangChain integration in REST mode
 - ✅ Multiple model providers (Anthropic, OpenAI, Google, Groq, Ollama)
-- ✅ Session management with automatic cleanup
-- ✅ Tool calling support (via OpenCode's native capabilities)
+- ✅ REST session management with automatic cleanup
+- ✅ Tool calling support in REST mode
 - ✅ Comprehensive error handling and validation
 - ✅ TypeScript support with full type definitions
 
@@ -242,7 +250,7 @@ This node implements a custom LangChain `BaseChatModel` that:
 
 1. **Session Management**: Creates and manages OpenCode sessions via REST API
 2. **Message Handling**: Converts LangChain messages to OpenCode prompt format
-3. **Streaming**: Implements Server-Sent Events (SSE) for real-time responses
+3. **Streaming**: Implements Server-Sent Events (SSE) for REST responses
 4. **Event Parsing**: Processes `message.part.updated` and `session.updated` events
 
 ### Key Components

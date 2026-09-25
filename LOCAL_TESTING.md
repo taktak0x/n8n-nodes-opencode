@@ -83,6 +83,33 @@ npm run build
 
 This creates the `dist/` folder with compiled JavaScript.
 
+## ACP Smoke Test
+
+Runs only when all required variables are set. `ACP_MODEL` must use
+`provider/model` format; no model name is assumed by test.
+
+Create executable Docker wrapper, for example `./opencode-acp-docker`:
+
+```sh
+#!/bin/sh
+exec docker run --rm -i --network host ghcr.io/anomalyco/opencode:latest acp
+```
+
+Then run deterministic smoke test with explicitly selected free model:
+
+```bash
+chmod +x ./opencode-acp-docker
+RUN_ACP_INTEGRATION=true \
+  ACP_EXECUTABLE="$PWD/opencode-acp-docker" \
+  ACP_CWD=/tmp \
+  ACP_MODEL=opencode/ling-3.0-flash-fin-free \
+  npx jest tests/acp.integration.test.ts --runInBand
+```
+
+`ACP_CWD` defaults to `/tmp`; use a path available inside ACP's runtime.
+Unset or incomplete variables produce clear skipped test output. Default
+`npm test` never requires Docker, network, or model credentials.
+
 ## Step 3: Install Node in n8n
 
 ### Option A: Using n8n's Custom Nodes Directory
