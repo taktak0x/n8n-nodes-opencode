@@ -123,8 +123,10 @@ export class OpenCodeAcpClient {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
-    if (this.options.bearerToken) {
-      headers.Authorization = `Bearer ${this.options.bearerToken}`;
+    const bearerToken =
+      this.options.bearerToken || process.env.ACP_BRIDGE_TOKEN;
+    if (bearerToken) {
+      headers.Authorization = `Bearer ${bearerToken}`;
     }
 
     try {
@@ -140,6 +142,11 @@ export class OpenCodeAcpClient {
       });
       const body = await this.readHttpBody(response);
       if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error(
+            "OpenCode ACP HTTP bridge authentication failed (401)",
+          );
+        }
         throw new Error(
           `OpenCode ACP HTTP request failed (${response.status}): ${body}`,
         );

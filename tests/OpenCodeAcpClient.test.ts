@@ -313,4 +313,95 @@ describe("OpenCodeAcpClient", () => {
     ).rejects.toThrow("OpenCode ACP exited (1)");
     expect(child.killedSignals).toEqual([]);
   });
+
+  it("uses ACP_BRIDGE_TOKEN for HTTP bridge authorization", async () => {
+    const originalEnv = process.env;
+    const originalFetch = global.fetch;
+    process.env = { ...originalEnv, ACP_BRIDGE_TOKEN: "env-token" };
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: null,
+      text: async () => JSON.stringify({ text: "ok" }),
+    });
+
+    try {
+      await expect(
+        new OpenCodeAcpClient({
+          providerID: "anthropic",
+          modelID: "test-model",
+          timeoutMs: 100,
+          httpUrl: "http://bridge.test/acp",
+        }).prompt("test"),
+      ).resolves.toBe("ok");
+      expect(global.fetch).toHaveBeenCalledWith(
+        "http://bridge.test/acp",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer env-token",
+          }),
+        }),
+      );
+    } finally {
+      process.env = originalEnv;
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("prefers configured HTTP bridge token over environment token", async () => {
+    const originalEnv = process.env;
+    const originalFetch = global.fetch;
+    process.env = { ...originalEnv, ACP_BRIDGE_TOKEN: "env-token" };
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: null,
+      text: async () => JSON.stringify({ text: "ok" }),
+    });
+
+    try {
+      await new OpenCodeAcpClient({
+        providerID: "anthropic",
+        modelID: "test-model",
+        timeoutMs: 100,
+        httpUrl: "http://bridge.test/acp",
+        bearerToken: "configured-token",
+      }).prompt("test");
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer configured-token",
+          }),
+        }),
+      );
+    } finally {
+      process.env = originalEnv;
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("returns clear error for unauthorized HTTP bridge response", async () => {
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      body: null,
+      text: async () => "token=secret-token",
+    });
+
+    try {
+      await expect(
+        new OpenCodeAcpClient({
+          providerID: "anthropic",
+          modelID: "test-model",
+          timeoutMs: 100,
+          httpUrl: "http://bridge.test/acp",
+          bearerToken: "secret-token",
+        }).prompt("test"),
+      ).rejects.toThrow("OpenCode ACP HTTP bridge authentication failed (401)");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
 });
