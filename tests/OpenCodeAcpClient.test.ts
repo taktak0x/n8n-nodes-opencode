@@ -279,6 +279,18 @@ describe("OpenCodeAcpClient", () => {
     ).toThrow("cwd must be absolute");
   });
 
+  it("requires HTTP or HTTPS bridge URL schemes", () => {
+    expect(
+      () =>
+        new OpenCodeAcpClient({
+          providerID: "anthropic",
+          modelID: "test-model",
+          timeoutMs: 100,
+          httpUrl: "file:///tmp/acp",
+        }),
+    ).toThrow("HTTP URL is invalid");
+  });
+
   it("times out without leaving child process alive", async () => {
     jest.useFakeTimers();
     child.onWrite = () => undefined;
@@ -403,5 +415,47 @@ describe("OpenCodeAcpClient", () => {
     } finally {
       global.fetch = originalFetch;
     }
+  });
+
+  it("redacts non-401 HTTP response bodies", async () => {
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      body: null,
+      text: async () => "secret response body",
+    });
+
+    try {
+      const request = new OpenCodeAcpClient({
+        providerID: "anthropic",
+        modelID: "test-model",
+        timeoutMs: 100,
+        httpUrl: "http://bridge.test/acp",
+      }).prompt("test");
+      await expect(request).rejects.toThrow(
+        "OpenCode ACP HTTP request failed (500)",
+      );
+      await expect(request).rejects.not.toThrow("secret response body");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("rejects oversized local ACP input and cleans up", async () => {
+    child.onWrite = (message) => {
+      if (message.method === "initialize") {
+        child.stdout.emit("data", Buffer.alloc(4 * 1024 * 1024 + 1));
+      }
+    };
+
+    await expect(
+      new OpenCodeAcpClient({
+        providerID: "anthropic",
+        modelID: "test-model",
+        timeoutMs: 100,
+      }).prompt("test"),
+    ).rejects.toThrow("OpenCode ACP input exceeded 4 MiB");
+    expect(child.killedSignals).toEqual(["SIGTERM"]);
   });
 });

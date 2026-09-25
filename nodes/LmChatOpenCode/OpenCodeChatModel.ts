@@ -160,7 +160,7 @@ export class OpenCodeChatModel extends BaseChatModel {
           modelID: this.modelID,
           timeoutMs: this.requestTimeout,
           ...(this.transport === "acp-http"
-            ? { httpUrl: this.baseUrl, bearerToken: this.apiKey }
+            ? { httpUrl: this.baseUrl }
             : { acpExecutable: this.acpExecutable, cwd: this.acpCwd }),
         }).prompt(this.convertMessagesToAcpPrompt(messages));
       } else {

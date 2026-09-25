@@ -98,6 +98,45 @@ describe("OpenCodeChatModel", () => {
     );
   });
 
+  it("uses ACP bridge token instead of REST API key", async () => {
+    const originalEnv = process.env;
+    process.env = { ...originalEnv, ACP_BRIDGE_TOKEN: "env-token" };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: null,
+      text: async () => JSON.stringify({ text: "bridge response" }),
+    });
+
+    try {
+      const acpHttpModel = new OpenCodeChatModel({
+        baseUrl: "http://bridge.test/acp",
+        apiKey: "rest-api-key",
+        providerID: "anthropic",
+        modelID: "test-model",
+        transport: "acp-http",
+      });
+
+      await expect(
+        acpHttpModel._generate([new HumanMessage("Hello")], {} as any),
+      ).resolves.toMatchObject({
+        generations: [expect.objectContaining({ text: "bridge response" })],
+      });
+      expect(mockFetch).toHaveBeenCalledWith(
+        "http://bridge.test/acp",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer env-token",
+          }),
+        }),
+      );
+      expect(mockFetch.mock.calls[0][1].headers.Authorization).not.toBe(
+        "Bearer rest-api-key",
+      );
+    } finally {
+      process.env = originalEnv;
+    }
+  });
+
   describe("Session Management", () => {
     it("should create a session when needed", async () => {
       mockFetch.mockResolvedValueOnce({

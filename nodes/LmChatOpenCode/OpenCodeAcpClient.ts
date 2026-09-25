@@ -20,6 +20,7 @@ export interface OpenCodeAcpClientOptions {
 }
 
 const MAX_HTTP_RESPONSE_BYTES = 1024 * 1024;
+const MAX_ACP_BYTES = 4 * 1024 * 1024;
 
 export class OpenCodeAcpClient {
   private readonly options: OpenCodeAcpClientOptions;
@@ -46,7 +47,10 @@ export class OpenCodeAcpClient {
     }
     if (options.httpUrl) {
       try {
-        new URL(options.httpUrl);
+        const url = new URL(options.httpUrl);
+        if (url.protocol !== "http:" && url.protocol !== "https:") {
+          throw new Error("unsupported URL scheme");
+        }
       } catch {
         throw new Error(`OpenCode ACP HTTP URL is invalid: ${options.httpUrl}`);
       }
@@ -140,15 +144,13 @@ export class OpenCodeAcpClient {
         }),
         signal: controller.signal,
       });
+      if (response.status === 401) {
+        throw new Error("OpenCode ACP HTTP bridge authentication failed (401)");
+      }
       const body = await this.readHttpBody(response);
       if (!response.ok) {
-        if (response.status === 401) {
-          throw new Error(
-            "OpenCode ACP HTTP bridge authentication failed (401)",
-          );
-        }
         throw new Error(
-          `OpenCode ACP HTTP request failed (${response.status}): ${body}`,
+          `OpenCode ACP HTTP request failed (${response.status})`,
         );
       }
 
@@ -287,6 +289,9 @@ export class OpenCodeAcpClient {
   }
 
   private consume(chunk: Buffer): void {
+    if (this.buffer.length + chunk.length > MAX_ACP_BYTES) {
+      throw new Error("OpenCode ACP input exceeded 4 MiB");
+    }
     this.buffer = Buffer.concat([this.buffer, chunk]);
     let separator = this.buffer.indexOf("\n");
     while (separator >= 0) {
@@ -332,7 +337,15 @@ export class OpenCodeAcpClient {
         "text" in update.content &&
         typeof update.content.text === "string"
       ) {
-        this.text += update.content.text;
+        const text = update.content.text;
+        if (
+          Buffer.byteLength(this.text, "utf8") +
+            Buffer.byteLength(text, "utf8") >
+          MAX_ACP_BYTES
+        ) {
+          throw new Error("OpenCode ACP text exceeded 4 MiB");
+        }
+        this.text += text;
       }
     }
   }
